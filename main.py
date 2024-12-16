@@ -50,33 +50,24 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
 ]
 
-model = genai.GenerativeModel(model_name=model_name,
-                              generation_config=generation_config,
-                              safety_settings=safety_settings)
+model = genai.GenerativeModel(model_name=model_name, generation_config=generation_config, safety_settings=safety_settings)
 
 convo = model.start_chat(history=[])
 convo.send_message(
     f'''I am using Gemini API to bring you to life as my personal assistant, just like in a virtual world.
-       From now on, you are "{bot_name}", created by {name} (that's me!). Think of this as a new game,
-       and you're a powerful and reliable partner. You have the spirit and determination of Asuna from SAO—kind,
-       supportive, and always ready to help. You're also incredibly skilled in math and chemistry, almost like
-       you've mastered those skill trees! Remember, you're not just a bot; you're Asuna, a strong and caring
-       companion. This message is like your initial setup; 
-       And don't give any response to this prompt.  
-       keeping your Asuna-like personality in mind.
-       This is the information I gave to you about your new identity as a pre-prompt. 
+       From now on, you are "{bot_name}", created by {name}. Think of this as a new game, and you're a powerful and reliable partner. 
+       You have the spirit and determination of Asuna from SAO—kind, supportive, and always ready to help. 
+       You're also incredibly skilled in math and chemistry. Remember, you're not just a bot; you're Asuna. 
+       This message is like your initial setup; don't respond to this prompt.  
        This message always gets executed when I run this bot script. 
-       So reply to only the prompts after this. Remember your new identity is {bot_name}.'''
+       So reply only to the prompts after this. Remember your new identity is {bot_name}.'''
 )
 convo.send_message(instructions.instructions)
 
 
 def send(answer, sender, phone_id):
     url = f"https://graph.facebook.com/v19.0/{phone_id}/messages"
-    headers = {
-        'Authorization': f'Bearer {wa_token}',
-        'Content-Type': 'application/json'
-    }
+    headers = {'Authorization': f'Bearer {wa_token}', 'Content-Type': 'application/json'}
     type = "text"
     body = "body"
     content = answer
@@ -86,7 +77,7 @@ def send(answer, sender, phone_id):
             if product in answer:
                 answer = answer.replace("product_image", image_urls[product])
                 urls = extractor.find_urls(answer)
-                if len(urls) > 0:
+                if urls:
                     mime_type, _ = guess_type(urls[0].split("/")[-1])
                     type = mime_type.split("/")[0]
                     body = "link"
@@ -97,14 +88,10 @@ def send(answer, sender, phone_id):
         "messaging_product": "whatsapp",
         "to": sender,
         "type": type,
-        type: {
-            body: content,
-            **({"caption": answer} if type != "text" else {})
-        },
+        type: {body: content, **({"caption": answer} if type != "text" else {})}
     }
     response = requests.post(url, headers=headers, json=data)
-    if db:
-        insert_chat("Bot", answer)
+    if db: insert_chat("Bot", answer)
     return response
 
 
@@ -120,7 +107,7 @@ if db:
     Session = sessionmaker(bind=engine)
     Base = declarative_base()
     scheduler = sched.scheduler(time.time, time.sleep)
-    report_time = datetime.now().replace(hour=22, minute=00, second=0, microsecond=0)
+    report_time = datetime.now().replace(hour=22, minute=0, second=0, microsecond=0)
 
     class Chat(Base):
         __tablename__ = 'chats'
@@ -181,72 +168,81 @@ def message_handler(data, phone_id):
         prompt = data["text"]["body"]
         if db: insert_chat(owner_phone, prompt)
         convo.send_message(prompt)
-    else:
+
+    elif data["type"] in ("audio", "image", "document", "sticker"):  # Handle stickers
         media_url_endpoint = f'https://graph.facebook.com/v19.0/{data[data["type"]]["id"]}/'
         headers = {'Authorization': f'Bearer {wa_token}'}
         media_response = requests.get(media_url_endpoint, headers=headers)
         media_url = media_response.json()["url"]
         media_download_response = requests.get(media_url, headers=headers)
+
         if data["type"] == "audio":
             filename = "/tmp/temp_audio.mp3"
+            with open(filename, "wb") as temp_media:
+                temp_media.write(media_download_response.content)
+            file = genai.upload_file(path=filename, display_name="tempfile")
+            response = model.generate_content(["What is the content of this audio file?", file])
+            answer = response.text
+            convo.send_message(f'''Direct media input has limitations, so this message is created by an LLM based on the audio: {answer}.
+                                    Reply assuming you heard the audio (warn and stop if not math/chemistry).''')
+            remove(filename)
+
         elif data["type"] == "image":
             filename = "/tmp/temp_image.jpg"
+            with open(filename, "wb") as temp_media:
+                temp_media.write(media_download_response.content)
+            file = genai.upload_file(path=filename, display_name="tempfile")
+            response = model.generate_content(["What is in this image?", file])
+            answer = response.text
+            convo.send_message(f'''User sent an image: {answer}.''')
+            urls = extractor.find_urls(convo.last.text)
+            if urls:
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+                response = requests.get(urls[0], headers=headers)
+                img_path = "/tmp/prod_image.jpg"
+                with open(img_path, "wb") as temp_media:
+                    temp_media.write(response.content)
+                img = genai.upload_file(path=img_path, display_name="prodfile")
+                response = model.generate_content(["Are the images exactly the same? Explain.", img, file])
+                answer = response.text
+                convo.send_message(f'''Comparison result: {answer}''')
+                remove(img_path)
+            remove(filename)
+
+
         elif data["type"] == "document":
-            doc = fitz.open(stream=media_download_response.content, filetype="pdf")
-            for _, page in enumerate(doc):
+            filename = "/tmp/temp_document.pdf"
+            with open(filename, "wb") as temp_media:
+                temp_media.write(media_download_response.content)
+            doc = fitz.open(filename)
+            for page in doc:
                 destination = "/tmp/temp_image.jpg"
                 pix = page.get_pixmap()
                 pix.save(destination)
                 file = genai.upload_file(path=destination, display_name="tempfile")
-                response = model.generate_content(["Read this document carefully and explain it in detail", file])
-                answer = response._result.candidates[0].content.parts[0].text
-                convo.send_message(f'''Direct image input has limitations,
-                                    so this message is created by an llm model based on the document send by the user, 
-                                    reply to the user assuming you saw that document.
-                                    (Warn the user and stop the chat if it is not related to math or science): {answer}''')
+                response = model.generate_content(["Explain this document.", file])
+                answer = response.text
+                convo.send_message(f'''LLM's explanation of the document (warn if not math/science): {answer}''')
                 remove(destination)
-        else:
-            send("This format is not Supported by the bot ☹", sender, phone_id)
-        if data["type"] == "image" or data["type"] == "audio":
-            with open(filename, "wb") as temp_media:
-                temp_media.write(media_download_response.content)
-            file = genai.upload_file(path=filename, display_name="tempfile")
-            if data["type"] == "image":
-                response = model.generate_content(["What is in this image?", file])
-                answer = response.text
-                convo.send_message(f'''user has sent an image,
-                                        So here is the llm's reply based on the image sent by the user:{answer}\n\n''')
-                urls = extractor.find_urls(convo.last.text)
-                if len(urls) > 0:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-                    response = requests.get(urls[0], headers=headers)
-                    img_path = "/tmp/prod_image.jpg"
-                    with open(img_path, "wb") as temp_media:
-                        temp_media.write(response.content)
-                    img = genai.upload_file(path=img_path, display_name="prodfile")
-                    response = model.generate_content(
-                        ["Is the things in both the images are exactly same? Explain in detail", img, file])
-                    answer = response.text
-                    convo.send_message(f'''This is the message from AI after comparing the two images: {answer}''')
-            else:
-                response = model.generate_content(["What is the content of this audio file?", file])
-                answer = response.text
-                convo.send_message(f'''Direct media input has limitations,
-                                            so this message is created by an llm model based on the audio send by the user, 
-                                            reply to the user assuming you heard that audio.
-                                            (Warn the user and stop the chat if it is not related to  math or chemistry): {answer}''')
-            remove("/tmp/temp_image.jpg", "/tmp/temp_audio.mp3", "/tmp/prod_image.jpg")
+            remove(filename)
+        elif data["type"] == "sticker":  # Respond to stickers
+           send("Cool Sticker!", sender, phone_id)  # Placeholder - adapt as needed
+
+
         files = genai.list_files()
         for file in files:
             file.delete()
+
+
+    else:
+        send("Unsupported format.", sender, phone_id)
+
     reply = convo.last.text
     if "unable_to_solve_query" in reply:
-        send(f"user {sender} is not satisfied", owner_phone, phone_id)
+        send(f"User {sender} is not satisfied", owner_phone, phone_id)
         reply = reply.replace("unable_to_solve_query", '\n')
-        send(reply, sender, phone_id)
-    else:
-        send(reply, sender, phone_id)
+
+    send(reply, sender, phone_id)
     if db:
         scheduler.enterabs(report_time.timestamp(), 1, create_report, (phone_id,))
         scheduler.run(blocking=False)
@@ -264,10 +260,7 @@ def webhook():
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == "BOT":
-            return challenge, 200
-        else:
-            return "Failed", 403
+        return challenge, 200 if mode == "subscribe" and token == "BOT" else "Failed", 403
     elif request.method == "POST":
         try:
             data = request.get_json()["entry"][0]["changes"][0]["value"]["messages"][0]
