@@ -192,8 +192,8 @@ def message_handler(data,phone_id):
                 answer=response._result.candidates[0].content.parts[0].text
                 convo.send_message(f'''Direct image input has limitations,
                                     so this message is created by an llm model based on the document send by the user, 
-                                    reply to the customer assuming you saw that document.
-                                    (Warn the customer and stop the chat if it is not related to the business): {answer}''')
+                                    reply to the user assuming you saw that document.
+                                    (Warn the user and stop the chat if it is not related to math or science): {answer}''')
                 remove(destination)
         else:send("This format is not Supported by the bot ☹",sender,phone_id)
         if data["type"] == "image" or data["type"] == "audio":
@@ -203,8 +203,8 @@ def message_handler(data,phone_id):
             if data["type"] == "image":
                 response = model.generate_content(["What is in this image?",file])
                 answer=response.text
-                convo.send_message(f'''Customer has sent an image,
-                                    So here is the llm's reply based on the image sent by the customer:{answer}\n\n''')
+                convo.send_message(f'''user has sent an image,
+                                    So here is the llm's reply based on the image sent by the user:{answer}\n\n''')
                 urls=extractor.find_urls(convo.last.text)
                 if len(urls)>0:
                     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
@@ -221,15 +221,15 @@ def message_handler(data,phone_id):
                 answer=response.text
                 convo.send_message(f'''Direct media input has limitations,
                                             so this message is created by an llm model based on the audio send by the user, 
-                                            reply to the customer assuming you heard that audio.
-                                            (Warn the customer and stop the chat if it is not related to the business): {answer}''')
+                                            reply to the user assuming you heard that audio.
+                                            (Warn the user and stop the chat if it is not related to  math or chemistry): {answer}''')
             remove("/tmp/temp_image.jpg","/tmp/temp_audio.mp3","/tmp/prod_image.jpg")
         files=genai.list_files()
         for file in files:
             file.delete()
     reply=convo.last.text
     if "unable_to_solve_query" in reply:
-        send(f"customer {sender} is not satisfied", owner_phone, phone_id)
+        send(f"user {sender} is not satisfied", owner_phone, phone_id)
         reply=reply.replace("unable_to_solve_query",'\n')
         send(reply, sender, phone_id)
     else:send(reply,sender,phone_id)
